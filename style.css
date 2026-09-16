@@ -15,7 +15,7 @@
 
 :root {
   --side:       #f37621;   /* ไซด์บาร์ */
-  --side-hi:      #d9edf5;   /* พื้นไฮไลต์อ่อน คู่สีตรงข้ามส้ม ใช้กับตัวอักษรเข้ม */
+  --side-hi:      #fefff5;   /* พื้นไฮไลต์อ่อน คู่สีตรงข้ามส้ม ใช้กับตัวอักษรเข้ม */
   --side-hi-deep: #1d5c87;   /* โทนเข้มของสีเดียวกัน ใช้เป็นพื้นทึบ/เส้นขอบ */
   --side-fg:    #d6d7d9;
   --side-line:  rgba(255, 255, 255, .18);
@@ -105,8 +105,8 @@ body:not(.guest) #login { display: none; }
 }
 
 .login-logo {
-  width: 76px;
-  height: 76px;
+  width: 260px;
+  height: 70px;
   margin-bottom: 14px;
   object-fit: contain;
 }
@@ -163,10 +163,11 @@ body:not(.guest) #login { display: none; }
 }
 
 .brand-logo {
-  width: 30px;
-  height: 30px;
+  width: 230px;
+  height: 65px;
   flex: none;
   object-fit: contain;
+  border-radius: 12px;
 }
 
 .side-title { min-width: 0; }
@@ -203,7 +204,7 @@ body:not(.guest) #login { display: none; }
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: var(--side-fg);
+  color: #fff;
   font: 400 14.5px var(--font);
   text-align: left;
   transition: background .15s, color .15s;
@@ -277,7 +278,7 @@ body:not(.guest) #login { display: none; }
   text-overflow: ellipsis;
 }
 
-.me-info small { display: block; font-size: 11.5px; color: #000; font-weight: 600; }
+.me-info small { display: block; font-size: 11.5px; color: #fff; font-weight: 600; }
 
 .side-out {
   display: flex;
@@ -289,12 +290,12 @@ body:not(.guest) #login { display: none; }
   border: 1px solid var(--side-line);
   border-radius: var(--radius);
   background: transparent;
-  color: var(--side-fg);
-  font: 500 13px var(--font);
+  color:#ffff;
+  font: 500 13px #fff;
   transition: background .15s, color .15s, border-color .15s;
 }
 .side-out svg { width: 16px; height: 16px; }
-.side-out:hover { background: var(--red); border-color: var(--red); color: #fff; }
+.side-out:hover { background: #ff0006; border-color: var(--red); color: #fff; }
 
 .nav-scrim { display: none; }
 
@@ -434,6 +435,7 @@ body:not(.guest) #login { display: none; }
 }
 .card:hover { box-shadow: 0 4px 12px rgba(0, 0, 0, .16); }
 .card:active { transform: scale(.98); }
+.card:disabled { opacity: .55; cursor: not-allowed; pointer-events: none; }
 
 .card-pic {
   display: flex;
@@ -470,6 +472,14 @@ body:not(.guest) #login { display: none; }
   font-variant-numeric: tabular-nums;
 }
 
+.card-stock {
+  display: block;
+  margin-top: 1px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.card-stock.out { color: var(--red); font-weight: 600; }
+
 /* จำนวนที่หยิบไว้แล้ว — ป้ายส้มมุมขวาบนของรูป */
 .card-qty {
   position: absolute;
@@ -484,6 +494,21 @@ body:not(.guest) #login { display: none; }
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
+
+/* การ์ดโปรโมชัน 3 ชิ้น 100 บาท — เด่นกว่าการ์ดเมนูปกติ ไม่มีรูปสินค้าให้ใช้ไอคอนแทน */
+.card.promo { background: var(--orange-sf); border: 1.5px dashed var(--orange); }
+.card.promo .card-pic { background: transparent; color: var(--orange); }
+.card.promo .card-pic svg { width: 30px; height: 30px; opacity: 1; }
+.card.promo .card-name { color: var(--orange-d); font-weight: 700; }
+
+/* กำลังอยู่ในโหมดเลือกสินค้าโปรโมชัน — การ์ดโปรโมชันเปลี่ยนเป็นพื้นทึบเพื่อให้เห็นชัดว่ากดค้างอยู่ */
+.card.promo.active { background: var(--orange); border-style: solid; }
+.card.promo.active .card-pic { color: #fff; }
+.card.promo.active .card-name,
+.card.promo.active .card-price { color: #fff; }
+
+/* การ์ดสินค้าที่กดเลือกได้ระหว่างโหมดโปรโมชัน — ขอบส้มเน้นให้ต่างจากการ์ดที่ถูกปิดกั้นชั่วคราว */
+.card.promo-pick { box-shadow: 0 0 0 2px var(--orange), 0 1px 2px rgba(0, 0, 0, .1); }
 
 .grid .empty,
 .grid .loading { grid-column: 1 / -1; }
@@ -701,32 +726,6 @@ body.no-bill .main { margin-right: 0; }
   font-variant-numeric: tabular-nums;
 }
 
-/* ยอดแยกภาษี — เกาะอยู่ท้ายการ์ดบิล ไม่เลื่อนไปกับรายการ */
-.bill-sum {
-  flex: none;
-  padding: 12px 16px 14px;
-  border-top: 1px solid var(--line);
-  background: var(--surface);
-}
-.bill-sum[hidden] { display: none; }
-
-.bill-sum > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 13px;
-  color: var(--label);
-}
-
-.bill-sum b { font-weight: 600; font-variant-numeric: tabular-nums; }
-
-.bill-sum .sum-note {
-  display: block;
-  margin-top: 6px;
-  font-size: 11.5px;
-  color: var(--faint);
-}
-
 .bill-foot { flex: none; }
 
 .bill-pay {
@@ -840,6 +839,10 @@ body.no-bill .main { margin-right: 0; }
 }
 
 .panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 14px 18px;
   border-bottom: 1px solid var(--line-l);
   font-size: 15px;
@@ -1057,6 +1060,27 @@ body.no-bill .main { margin-right: 0; }
   transition: border-color .15s;
 }
 .fld select:focus { border-color: var(--orange); }
+
+.fld-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+}
+.fld-check input {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  accent-color: var(--orange);
+  cursor: pointer;
+}
+.fld-check > span {
+  display: inline;
+  margin-bottom: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+}
 
 .fld-wrap { position: relative; }
 .fld-wrap input.has-lead { padding-left: 38px; }

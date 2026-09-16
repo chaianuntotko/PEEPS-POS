@@ -19,8 +19,8 @@
 <div id="login">
   <form class="login-card" id="login-form">
     <div class="login-brand">
-      <img class="login-logo" src="img/cashier.png" alt="" width="76" height="76">
-      <b>POS PEEPS</b>
+      <img class="login-logo" src="img/Point of Sale.png" alt="" width="230" height="76">
+      <!-- <b>POS PEEPS</b> -->
       <small>ระบบขายหน้าร้าน</small>
     </div>
 
@@ -52,11 +52,11 @@
 <div class="nav-scrim" id="nav-scrim"></div>
 <aside class="side" id="side">
   <div class="side-brand">
-    <img class="brand-logo" src="img/cashier.png" alt="" width="30" height="30">
-    <div class="side-title">
+    <img class="brand-logo" src="img/Point of Sale.png" alt="" width="500" height="100">
+    <!-- <div class="side-title">
       <b>POS</b>
       <small>ระบบขายหน้าร้าน</small>
-    </div>
+    </div> -->
   </div>
 
   <nav class="side-nav" role="tablist">
@@ -145,7 +145,10 @@
       </div>
     </div>
     <div class="panel">
-      <div class="panel-head"><span id="orders-head">บิลของวันนี้</span> <span class="count" id="orders-count"></span></div>
+      <div class="panel-head">
+        <div><span id="orders-head">บิลของวันนี้</span> <span class="count" id="orders-count"></span></div>
+        <button class="btn-line" id="export-orders-btn" type="button">ดาวน์โหลดสรุป (ไฟล์ชีท)</button>
+      </div>
       <div class="tbl-wrap">
         <table class="tbl">
           <thead>
@@ -176,6 +179,7 @@
               <th class="l">ชื่อเมนู</th>
               <th class="l c-cat">หมวดหมู่</th>
               <th class="r">ราคา</th>
+              <th class="r">คงเหลือ</th>
               <th>สถานะ</th>
               <th></th>
             </tr>
@@ -197,18 +201,12 @@
 
   <div class="bill-card">
     <div class="bill-items" id="bill-items"></div>
-
-    <div class="bill-sum" id="bill-sum" hidden>
-      <div><span>ยอดก่อนภาษี</span><b id="sum-net">฿0</b></div>
-      <div><span>ภาษีมูลค่าเพิ่ม (7%)</span><b id="sum-vat">฿0</b></div>
-      <div class="sum-note">ราคาเมนูรวมภาษีมูลค่าเพิ่มแล้ว</div>
-    </div>
   </div>
 
   <div class="bill-foot">
     <div class="bill-pay" id="bill-pay">
-      <button type="button" data-pay="เงินสด" class="on">เงินสด</button>
-      <button type="button" data-pay="โอนเงิน">โอนเงิน</button>
+      <button type="button" data-pay="เงินสด">เงินสด</button>
+      <button type="button" data-pay="โอนเงิน" class="on">โอนเงิน</button>
     </div>
     <button class="btn-solid btn-pay" id="checkout-btn" disabled>ชำระเงิน ฿0</button>
   </div>
@@ -237,6 +235,11 @@
         </label>
         <label class="fld"><span>ราคา (บาท)</span><input id="menu-price" type="number" min="0" step="0.01" placeholder="45"></label>
       </div>
+      <label class="fld"><span>สต๊อกคงเหลือ (เว้นว่าง = ไม่จำกัด)</span><input id="menu-stock" type="number" min="0" step="1" placeholder="เช่น 20"></label>
+      <label class="fld fld-check">
+        <input type="checkbox" id="menu-promo">
+        <span>ร่วมโปรโมชัน "3 ชิ้น 100 บาท"</span>
+      </label>
       <div class="fld">
         <span>รูปภาพเมนู</span>
         <div class="pic">

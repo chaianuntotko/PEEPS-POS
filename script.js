@@ -1,7 +1,5 @@
 /* ระบบ POS ร้านค้า — เชื่อมต่อ Google Apps Script ผ่าน api.js */
 
-var VAT_RATE = 0.07;   /* ราคาเมนูรวมภาษีแล้ว จึงถอด VAT ออกจากยอด ไม่ใช่บวกเพิ่ม */
-
 /* ---------- ยูทิลิตี้ ---------- */
 function $(id) { return document.getElementById(id); }
 
@@ -69,7 +67,7 @@ var MENU = [];
 var ORDERS = [];
 var CART = [];
 var CATEGORY = 'all';
-var PAYMENT = 'เงินสด';
+var PAYMENT = 'โอนเงิน';
 var PENDING_IMAGE = null;   /* รูปที่เพิ่งเลือกแต่ยังไม่ได้บันทึก */
 var CLEAR_IMAGE = false;    /* กดเอารูปเดิมออกโดยไม่ได้เลือกรูปใหม่ */
 var LOADING_MENU = false;
@@ -247,8 +245,9 @@ $('logout-btn').addEventListener('click', function () {
   ORDERS = [];
   ORDERS_DATE = '';
   CATEGORY = 'all';
+  cancelPromoMode();
   /* เครื่องเดียวใช้หลายคน ค่าที่ค้างอยู่ต้องไม่ตกไปถึงคนถัดไป */
-  setPayment('เงินสด');
+  setPayment('โอนเงิน');
   $('table-no').value = '';
   document.body.classList.add('guest');
   showTab('pos');
@@ -276,6 +275,8 @@ function showTab(tab) {
   $('add-menu-btn').hidden = tab !== 'menu';
 
   if (tab !== 'pos') {
+    /* ออกจากหน้าขายกลางคันตอนเลือกโปรโมชันอยู่ ต้องล้างสถานะ ไม่งั้นกลับมาจะค้างครึ่ง ๆ กลาง ๆ */
+    if (PROMO_MODE) { cancelPromoMode(); renderGrid(); }
     $('admin-search').placeholder = SEARCH_HINT[tab];
     $('admin-search').value = '';
     /* ORDERS_DATE ว่างแปลว่ายังไม่เคยโหลดบิลเลยตั้งแต่ล็อกอิน เปิดแท็บครั้งแรกจึงค่อยยิง */
@@ -314,6 +315,33 @@ function loadMenuCache() {
   } catch (e) { return []; }
 }
 
+/* addMenuItem/updateMenuItem ตอนนี้ส่งแถวที่เพิ่งบันทึกกลับมาด้วย เอามาแปะทับ MENU ในเครื่องได้เลย
+   ไม่ต้องขอ getAllMenuForAdmin() ทั้งชีตซ้ำอีกรอบทุกครั้งที่บันทึกเมนู — ลดเวลารอลงครึ่งหนึ่ง
+   (ถ้า backend ยังเป็นเวอร์ชันเก่าที่ไม่ส่ง item กลับมา ผู้เรียกจะ fallback ไปเรียก loadMenu() แทน) */
+function applyMenuItem(it) {
+  var mapped = {
+    id: it.id,
+    name: it.name,
+    category: it.category,
+    price: Number(it.price) || 0,
+    active: !!it.active,
+    promo: !!it.promo,
+    stock: it.stock == null ? null : Number(it.stock),
+    driveId: it.driveId || '',
+    fileId: it.fileId || '',
+    image: imgUrl(it.fileId)
+  };
+  var idx = -1;
+  for (var i = 0; i < MENU.length; i++) {
+    if (String(MENU[i].id) === String(mapped.id)) { idx = i; break; }
+  }
+  if (idx >= 0) MENU[idx] = mapped; else MENU.push(mapped);
+  saveMenuCache();
+  renderCats();
+  renderGrid();
+  renderMenuTable();
+}
+
 function loadMenu() {
   if (!HAS_BACKEND) return Promise.resolve();
 
@@ -336,6 +364,8 @@ function loadMenu() {
           category: it.category,
           price: Number(it.price) || 0,
           active: !!it.active,
+          promo: !!it.promo,
+          stock: it.stock == null ? null : Number(it.stock),
           driveId: it.driveId || '',
           fileId: it.fileId || '',
           image: imgUrl(it.fileId)
@@ -405,6 +435,149 @@ function cartQty(id) {
   return line ? line.qty : 0;
 }
 
+/* ---------- สต๊อก ---------- */
+/* จำนวนของเมนู id ที่ "จองไว้แล้ว" ในบิลปัจจุบัน — ทั้งบรรทัดปกติและที่ซ่อนอยู่ในโปรโมชัน */
+function usedStock(id) {
+  var used = 0;
+  CART.forEach(function (c) {
+    if (String(c.id) === String(id)) used += c.qty;
+    if (c.picks) {
+      c.picks.forEach(function (p) {
+        if (String(p.id) === String(id)) used += p.qty * c.qty;
+      });
+    }
+  });
+  return used;
+}
+
+/* เมนูที่ไม่ได้ตั้งสต๊อกไว้ (stock == null) ถือว่าขายได้ไม่จำกัด คืนค่า null แทนตัวเลข */
+function stockLeft(item, extra) {
+  if (item.stock == null) return null;
+  return item.stock - usedStock(item.id) - (extra || 0);
+}
+
+function canIncrementLine(line) {
+  if (line.promo && line.picks) {
+    return !line.picks.some(function (p) {
+      var item = MENU.filter(function (m) { return String(m.id) === String(p.id); })[0];
+      return item && item.stock != null && stockLeft(item, 0) < p.qty;
+    });
+  }
+  var item = MENU.filter(function (m) { return String(m.id) === String(line.id); })[0];
+  return !(item && item.stock != null && stockLeft(item, 0) <= 0);
+}
+
+/* ---------- โปรโมชัน 3 ชิ้น 100 บาท ---------- */
+/* กดการ์ดโปรโมชันเพื่อเข้าโหมดเลือก แล้วแตะสินค้าที่ร่วมรายการได้เลยจากตาราง — ครบ 3 ชิ้นก็ปิดยอดอัตโนมัติ
+   ไม่ต้องเปิดกล่องโต้ตอบแยก ทำให้แคชเชียร์เลือกได้เร็วกว่าตอนหน้างาน */
+var PROMO_QTY = 3;
+var PROMO_PRICE = 100;
+var PROMO_LABEL = 'โปรโมชัน 3 ชิ้น 100 บาท';
+var PROMO_MODE = false;   /* กำลังอยู่ในโหมดเลือกสินค้าโปรโมชันหรือไม่ */
+var PROMO_PICKS = {};     /* id เมนู -> จำนวนที่เลือกไว้ในรอบนี้ */
+
+function promoItems() {
+  return MENU.filter(function (m) { return m.active && m.promo; });
+}
+
+function promoPickedCount() {
+  return Object.keys(PROMO_PICKS).reduce(function (s, id) { return s + PROMO_PICKS[id]; }, 0);
+}
+
+function promoCartQty() {
+  return CART.filter(function (c) { return c.promo; }).reduce(function (s, c) { return s + c.qty; }, 0);
+}
+
+/* ถ้าเมนูร่วมโปรโมชันทุกตัวตั้งสต๊อกไว้และรวมกันเหลือไม่ถึง 3 ชิ้น ให้ปิดการ์ดโปรโมชันไปเลย
+   แต่ถ้ามีตัวใดตัวหนึ่งไม่ได้ตามสต๊อก (ขายได้ไม่จำกัด) ก็ถือว่ายังเลือกได้เสมอ */
+function promoSoldOut() {
+  var items = promoItems();
+  if (!items.length) return true;
+  if (items.some(function (m) { return m.stock == null; })) return false;
+  var sum = items.reduce(function (s, m) { return s + Math.max(0, stockLeft(m, 0)); }, 0);
+  return sum < PROMO_QTY;
+}
+
+function cancelPromoMode() {
+  PROMO_MODE = false;
+  PROMO_PICKS = {};
+}
+
+/* กดการ์ดโปรโมชัน — ยังไม่เริ่มก็เข้าโหมดเลือก กำลังเลือกอยู่แล้วก็ยกเลิก */
+function togglePromoMode() {
+  if (PROMO_MODE) {
+    cancelPromoMode();
+  } else {
+    if (promoSoldOut()) return;
+    PROMO_MODE = true;
+    PROMO_PICKS = {};
+  }
+  renderGrid();
+}
+
+/* กดการ์ดสินค้าระหว่างโหมดโปรโมชัน — นับเข้าชุดทันที ครบ 3 ชิ้นแล้วปิดยอดอัตโนมัติ */
+function pickForPromo(id) {
+  var item = MENU.filter(function (m) { return String(m.id) === String(id); })[0];
+  if (!item || !item.active || !item.promo) return;
+
+  var cur = PROMO_PICKS[id] || 0;
+  var left = stockLeft(item, cur);
+  if (left !== null && left <= 0) {
+    toast('สินค้าคงเหลือไม่พอ', 'err');
+    return;
+  }
+
+  PROMO_PICKS[id] = cur + 1;
+
+  if (promoPickedCount() >= PROMO_QTY) finalizePromo();
+  else renderGrid();
+}
+
+function finalizePromo() {
+  var names = [];
+  var picks = [];
+  Object.keys(PROMO_PICKS).forEach(function (id) {
+    var item = MENU.filter(function (m) { return String(m.id) === String(id); })[0];
+    if (!item) return;
+    var q = PROMO_PICKS[id];
+    for (var i = 0; i < q; i++) names.push(item.name);
+    picks.push({ id: item.id, qty: q });
+  });
+
+  CART.push({
+    id: 'promo-' + Date.now(),
+    name: PROMO_LABEL + ' (' + names.join(', ') + ')',
+    price: PROMO_PRICE,
+    qty: 1,
+    promo: true,
+    picks: picks
+  });
+
+  cancelPromoMode();
+  toast('เพิ่มโปรโมชันลงบิลแล้ว');
+  renderBill();
+  renderGrid();
+}
+
+function renderPromoCard() {
+  var q = promoCartQty();
+  var soldOut = promoSoldOut();
+  var picked = promoPickedCount();
+
+  var name = PROMO_MODE ? 'กำลังเลือกโปรโมชัน' : PROMO_LABEL;
+  var sub = PROMO_MODE
+    ? 'เลือกแล้ว ' + picked + '/' + PROMO_QTY + ' ชิ้น — แตะซ้ำเพื่อยกเลิก'
+    : (soldOut ? 'สินค้าหมด' : 'แตะเพื่อเลือกสินค้า ' + PROMO_QTY + ' ชิ้น');
+
+  return '<button type="button" class="card promo' + (PROMO_MODE ? ' active' : '') + '" data-promo="1"' + (soldOut && !PROMO_MODE ? ' disabled' : '') + '>'
+    + '<span class="card-pic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12v9H4v-9M2 7h20v5H2zM12 22V7M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg></span>'
+    + (q ? '<span class="card-qty">' + q + '</span>' : '')
+    + '<span class="card-body">'
+    + '<span class="card-name">' + esc(name) + '</span>'
+    + '<span class="card-price">' + esc(sub) + '</span>'
+    + '</span></button>';
+}
+
 function renderGrid() {
   var grid = $('grid');
 
@@ -419,28 +592,43 @@ function renderGrid() {
     return CATEGORY === 'all' || m.category === CATEGORY;
   });
 
+  /* การ์ดโปรโมชันไม่ผูกกับหมวดหมู่ — โชว์ค้างไว้ทุกแท็บตราบใดที่มีเมนูร่วมรายการ */
+  var promoCard = promoItems().length ? renderPromoCard() : '';
+
   if (!list.length) {
-    grid.innerHTML = '<div class="empty">'
+    grid.innerHTML = promoCard + '<div class="empty">'
       + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h11a3 3 0 0 1 3 3v15H7a3 3 0 0 1-3-3z"/><path d="M18 8h2v13H7"/></svg>'
       + (MENU.length ? 'ไม่มีเมนูในหมวดนี้' : 'ยังไม่มีเมนูในระบบ — เพิ่มได้ที่หน้าเมนูและราคา')
       + '</div>';
-    return;
+  } else {
+    grid.innerHTML = promoCard + list.map(function (m) {
+      var eligible = !!m.promo;
+      /* ระหว่างโหมดโปรโมชัน ป้ายตัวเลขบนการ์ดสินค้าที่ร่วมรายการจะโชว์จำนวนที่เลือกไว้รอบนี้แทนจำนวนในบิล */
+      var q = PROMO_MODE && eligible ? (PROMO_PICKS[m.id] || 0) : cartQty(m.id);
+      var left = stockLeft(m, PROMO_MODE && eligible ? (PROMO_PICKS[m.id] || 0) : 0);
+      var soldOut = left !== null && left <= 0;
+      /* ตอนอยู่ในโหมดโปรโมชัน สินค้าที่ไม่ร่วมรายการจะกดไม่ได้ชั่วคราว กันเลือกผิดประเภท */
+      var disabled = soldOut || (PROMO_MODE && !eligible);
+      var pic = picTag(m.image, m.name, m.fileId);
+      return '<button type="button" class="card' + (PROMO_MODE && eligible ? ' promo-pick' : '') + '" data-id="' + esc(m.id) + '"' + (disabled ? ' disabled' : '') + '>'
+        + '<span class="card-pic">' + pic + '</span>'
+        + (q ? '<span class="card-qty">' + q + '</span>' : '')
+        + '<span class="card-body">'
+        + '<span class="card-name">' + esc(m.name) + '</span>'
+        + '<span class="card-price">' + baht(m.price) + '</span>'
+        + (m.stock == null ? '' : '<span class="card-stock' + (soldOut ? ' out' : '') + '">' + (soldOut ? 'สินค้าหมด' : 'เหลือ ' + left + ' ชิ้น') + '</span>')
+        + '</span></button>';
+    }).join('');
   }
 
-  grid.innerHTML = list.map(function (m) {
-    var q = cartQty(m.id);
-    var pic = picTag(m.image, m.name, m.fileId);
-    return '<button type="button" class="card" data-id="' + esc(m.id) + '">'
-      + '<span class="card-pic">' + pic + '</span>'
-      + (q ? '<span class="card-qty">' + q + '</span>' : '')
-      + '<span class="card-body">'
-      + '<span class="card-name">' + esc(m.name) + '</span>'
-      + '<span class="card-price">' + baht(m.price) + '</span>'
-      + '</span></button>';
-  }).join('');
+  var promoBtn = grid.querySelector('.card[data-promo]');
+  if (promoBtn) promoBtn.addEventListener('click', togglePromoMode);
 
-  grid.querySelectorAll('.card').forEach(function (card) {
-    card.addEventListener('click', function () { addToCart(card.dataset.id); });
+  grid.querySelectorAll('.card[data-id]').forEach(function (card) {
+    card.addEventListener('click', function () {
+      if (PROMO_MODE) pickForPromo(card.dataset.id);
+      else addToCart(card.dataset.id);
+    });
   });
 }
 
@@ -448,6 +636,11 @@ function renderGrid() {
 function addToCart(id) {
   var item = MENU.filter(function (m) { return String(m.id) === String(id); })[0];
   if (!item) return;
+
+  if (item.stock != null && stockLeft(item, 0) <= 0) {
+    toast('สินค้าคงเหลือไม่พอ', 'err');
+    return;
+  }
 
   var line = CART.filter(function (c) { return String(c.id) === String(id); })[0];
   if (line) line.qty++;
@@ -464,11 +657,6 @@ function cartTotal() {
 function renderBill() {
   var total = cartTotal();
   var pieces = CART.reduce(function (s, c) { return s + c.qty; }, 0);
-  var net = total / (1 + VAT_RATE);
-
-  $('sum-net').textContent = baht(net, 2);
-  $('sum-vat').textContent = baht(total - net, 2);
-  $('bill-sum').hidden = !CART.length;
 
   $('checkout-btn').disabled = !CART.length;
   $('checkout-btn').textContent = 'ชำระเงิน ' + baht(total);
@@ -504,6 +692,7 @@ function renderBill() {
       var i = Number(b.dataset.i);
       var act = b.dataset.act;
       if (act === 'plus') {
+        if (!canIncrementLine(CART[i])) { toast('สินค้าคงเหลือไม่พอ', 'err'); return; }
         CART[i].qty++;
       } else if (act === 'minus') {
         CART[i].qty--;
@@ -543,7 +732,12 @@ function checkout() {
   var order = {
     tableName: table,
     payment: PAYMENT,
-    items: CART.map(function (c) { return { name: c.name, price: c.price, qty: c.qty }; })
+    items: CART.map(function (c) {
+      var it = { name: c.name, price: c.price, qty: c.qty };
+      if (c.picks) it.picks = c.picks;
+      else it.id = c.id;
+      return it;
+    })
   };
 
   $('checkout-btn').disabled = true;
@@ -561,11 +755,31 @@ function checkout() {
       renderBill();
       renderGrid();
       loadOrders(ymd(new Date()));
+      /* submitOrder หักสต๊อกในชีตไปแล้วฝั่งเซิร์ฟเวอร์ แต่ MENU ในเบราว์เซอร์ยังเป็นค่าก่อนขาย
+         ถ้าไม่อัปเดตตรงนี้ ตัวเลข "เหลือ" บนการ์ดจะค้างค่าเดิมและเพี้ยนไปเรื่อย ๆ ทุกครั้งที่ขาย
+         backend เวอร์ชันใหม่ส่ง stockUpdates (id -> ค่าคงเหลือใหม่) กลับมาด้วย เอามาแปะทับ MENU
+         ในเครื่องได้เลยโดยไม่ต้องขอเมนูทั้งชีตซ้ำ (เร็วกว่า loadMenu() มาก) — ถ้า backend ยังเก่า
+         (ไม่มี stockUpdates) ค่อย fallback ไปโหลดเมนูใหม่ทั้งหมดเหมือนเดิม */
+      if (res.stockUpdates) {
+        var changed = false;
+        Object.keys(res.stockUpdates).forEach(function (mid) {
+          var m = MENU.filter(function (x) { return String(x.id) === String(mid); })[0];
+          if (m) { m.stock = Number(res.stockUpdates[mid]); changed = true; }
+        });
+        if (changed) { saveMenuCache(); renderGrid(); renderMenuTable(); }
+      } else {
+        loadMenu();
+      }
     })
     .catch(function (e) {
       $('checkout-btn').disabled = false;
       console.error(e);
-      /* บิลอาจถูกบันทึกไปแล้วแต่คำตอบหายระหว่างทาง กดซ้ำทันทีจะได้บิลซ้ำ */
+      /* Apps Script ยังรันงานต่อจนจบแม้เบราว์เซอร์จะเลิกรอไปแล้ว (timeout) บิลจึงอาจถูกบันทึกจริง
+         ทั้งที่ฝั่งนี้เห็นเป็น error — โหลดประวัติวันนี้ใหม่ให้เห็นทันทีว่าจริง ๆ แล้วเข้าไปหรือยัง
+         โดยไม่แตะตะกร้า เผื่อไม่เข้าจริงจะได้กดชำระเงินซ้ำได้โดยไม่ต้องพิมพ์รายการใหม่
+         สต๊อกก็อาจถูกหักไปแล้วเช่นกัน จึงโหลดเมนูใหม่ด้วยเพื่อให้ตัวเลขคงเหลือตรงกับชีตจริง */
+      loadOrders(ymd(new Date()));
+      loadMenu();
       toast('บันทึกบิลไม่สำเร็จ — ตรวจที่ประวัติการขายก่อนกดชำระเงินซ้ำ', 'err');
     });
 }
@@ -599,6 +813,8 @@ function renderOrders() {
   $('stat-count').textContent = ORDERS.length;
   $('stat-avg').textContent = baht(ORDERS.length ? total / ORDERS.length : 0);
   $('orders-head').textContent = 'บิลของ' + dayWord;
+
+  $('export-orders-btn').disabled = LOADING_ORDERS || !ORDERS_DATE;
 
   var body = $('orders-rows');
   if (LOADING_ORDERS && !ORDERS.length) {
@@ -635,12 +851,93 @@ function renderOrders() {
   }).join('');
 }
 
+/* ตัวเลขคอลัมน์ที่มีจุลภาค/เครื่องหมายคำพูด/ขึ้นบรรทัดใหม่ ต้องครอบด้วย "" ไม่งั้น Excel จะอ่านคอลัมน์เพี้ยน */
+function csvCell(v) {
+  var s = String(v == null ? '' : v);
+  if (/["\,\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+function csvRow(arr) { return arr.map(csvCell).join(','); }
+
+/* ดาวน์โหลดสรุปยอดขายของวันที่กำลังดูอยู่เป็น .csv เปิดได้ตรงด้วย Excel / Google ชีต
+   ใส่ BOM (﻿) นำหน้าไว้ ไม่งั้น Excel จะอ่านภาษาไทยเพี้ยนเป็นตัวอักษรมั่ว */
+function exportOrdersCsv() {
+  if (!ORDERS_DATE) return;
+
+  var total = ORDERS.reduce(function (s, o) { return s + (Number(o.total) || 0); }, 0);
+  var lines = [];
+
+  lines.push(csvRow(['สรุปยอดขายวันที่', thaiDate(ORDERS_DATE)]));
+  lines.push(csvRow(['ยอดขายรวม (บาท)', total]));
+  lines.push(csvRow(['จำนวนบิล', ORDERS.length]));
+  lines.push(csvRow(['เฉลี่ยต่อบิล (บาท)', ORDERS.length ? Math.round((total / ORDERS.length) * 100) / 100 : 0]));
+  lines.push('');
+
+  /* บรรทัดโปรโมชันตั้งราคาเหมารวม ไม่มีราคาต่อชิ้นที่แท้จริงของแต่ละตัวที่เลือก จึงรวมยอดขาย (บาท)
+     ไว้เป็นก้อนเดียวภายใต้ชื่อโปรโมชันคงที่ (ไม่แยกตามชุดที่เลือก ไม่งั้นแต่ละชุดจะกลายเป็นคนละแถว)
+     ส่วนจำนวนชิ้นจริงที่ใช้ไปต่อเมนู แยกไว้อีกตารางข้างล่างสำหรับเช็กสต๊อก/เติมของ */
+  lines.push(csvRow(['รายการที่ขาย', 'จำนวน', 'ยอดขาย (บาท)']));
+  var itemMap = {};
+  ORDERS.forEach(function (o) {
+    (o.items || []).forEach(function (it) {
+      var key = it.picks ? PROMO_LABEL : it.name;
+      if (!itemMap[key]) itemMap[key] = { qty: 0, total: 0 };
+      itemMap[key].qty += Number(it.qty) || 0;
+      itemMap[key].total += (Number(it.price) || 0) * (Number(it.qty) || 0);
+    });
+  });
+  Object.keys(itemMap)
+    .map(function (name) { return [name, itemMap[name].qty, itemMap[name].total]; })
+    .sort(function (a, b) { return b[2] - a[2]; })
+    .forEach(function (r) { lines.push(csvRow(r)); });
+  lines.push('');
+
+  var promoUnits = {};
+  ORDERS.forEach(function (o) {
+    (o.items || []).forEach(function (it) {
+      if (!it.picks) return;
+      it.picks.forEach(function (p) {
+        var item = MENU.filter(function (m) { return String(m.id) === String(p.id); })[0];
+        var name = item ? item.name : ('เมนูที่ถูกลบ #' + p.id);
+        promoUnits[name] = (promoUnits[name] || 0) + (Number(p.qty) || 0) * (Number(it.qty) || 0);
+      });
+    });
+  });
+  if (Object.keys(promoUnits).length) {
+    lines.push(csvRow(['จำนวนชิ้นที่ขายผ่านโปรโมชัน (แยกตามเมนู)', 'จำนวน (ชิ้น)']));
+    Object.keys(promoUnits)
+      .map(function (name) { return [name, promoUnits[name]]; })
+      .sort(function (a, b) { return b[1] - a[1]; })
+      .forEach(function (r) { lines.push(csvRow(r)); });
+    lines.push('');
+  }
+
+  lines.push(csvRow(['เวลา', 'เลขที่บิล', 'โต๊ะ / ลูกค้า', 'รายการ', 'ชำระโดย', 'ยอดรวม (บาท)']));
+  ORDERS.forEach(function (o) {
+    var items = (o.items || []).map(function (it) { return it.name + ' ×' + it.qty; }).join(', ');
+    lines.push(csvRow([clockOf(o.time), o.orderId, o.table, items, o.payment, o.total]));
+  });
+
+  var bom = String.fromCharCode(0xFEFF);
+  var blob = new Blob([bom + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'ยอดขาย-' + ORDERS_DATE + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+
+$('export-orders-btn').addEventListener('click', exportOrdersCsv);
+
 /* ---------- เมนูและราคา ---------- */
 function renderMenuTable() {
   var body = $('menu-rows');
   if (LOADING_MENU && !MENU.length) {
     $('menu-count').textContent = '';
-    body.innerHTML = '<tr><td colspan="6">' + spinnerBox('กำลังโหลดเมนู…') + '</td></tr>';
+    body.innerHTML = '<tr><td colspan="7">' + spinnerBox('กำลังโหลดเมนู…') + '</td></tr>';
     return;
   }
 
@@ -652,7 +949,7 @@ function renderMenuTable() {
   $('menu-count').textContent = list.length + ' รายการ';
 
   if (!list.length) {
-    body.innerHTML = '<tr><td colspan="6"><div class="empty">'
+    body.innerHTML = '<tr><td colspan="7"><div class="empty">'
       + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h11a3 3 0 0 1 3 3v15H7a3 3 0 0 1-3-3z"/><path d="M18 8h2v13H7"/></svg>'
       + (MENU.length ? 'ไม่พบเมนูที่ตรงกับที่ค้นหา' : 'ยังไม่มีเมนูในระบบ') + '</div></td></tr>';
     return;
@@ -665,6 +962,7 @@ function renderMenuTable() {
       + '<td class="l t-name">' + esc(m.name) + '</td>'
       + '<td class="l c-cat t-sub">' + esc(m.category) + '</td>'
       + '<td class="r t-money">' + baht(m.price) + '</td>'
+      + '<td class="r t-sub">' + (m.stock == null ? 'ไม่จำกัด' : m.stock) + '</td>'
       + '<td><span class="pill ' + (m.active ? 'p-on' : 'p-off') + '">' + (m.active ? 'เปิดขาย' : 'ปิดขาย') + '</span></td>'
       + '<td><span class="acts">'
       + '<button class="mini" data-act="edit" data-id="' + esc(m.id) + '">แก้ไข</button>'
@@ -708,6 +1006,8 @@ function openMenuForm(item) {
   }
   catSelect.value = item ? item.category : '';
   $('menu-price').value = item ? item.price : '';
+  $('menu-promo').checked = !!(item && item.promo);
+  $('menu-stock').value = (item && item.stock != null) ? item.stock : '';
   setPreview(item ? item.image : '', item ? item.fileId : '');
 
   $('menu-modal-title').textContent = item ? 'แก้ไขเมนู — ' + item.name : 'เพิ่มเมนู';
@@ -785,7 +1085,14 @@ $('menu-form').addEventListener('submit', function (e) {
     return;
   }
 
-  var payload = { name: name, category: category, price: price };
+  var stockRaw = $('menu-stock').value.trim();
+  var stock = stockRaw === '' ? null : Number(stockRaw);
+  if (stockRaw !== '' && !(stock >= 0)) {
+    toast('สต๊อกต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป', 'err');
+    return;
+  }
+
+  var payload = { name: name, category: category, price: price, promo: $('menu-promo').checked, stock: stock };
   if (PENDING_IMAGE) payload.imageBase64 = PENDING_IMAGE;
 
   var existing = MENU.filter(function (m) { return String(m.id) === String(id); })[0];
@@ -800,6 +1107,13 @@ $('menu-form').addEventListener('submit', function (e) {
   btn.disabled = true;
   btn.textContent = PENDING_IMAGE ? 'กำลังอัปโหลดรูป…' : 'กำลังบันทึก…';
 
+  /* คำขอเขียนรอได้นานถึง 60 วิ (ดู SLOW_WRITE ใน api.js) เซิร์ฟเวอร์ที่เพิ่งถูก deploy ใหม่
+     มักช้าผิดปกติแค่ครั้งแรก (cold start) — ปุ่มเงียบไปนานเกิน 15 วิจะดูเหมือนค้าง จึงขึ้นข้อความ
+     บอกให้ชัดว่ายังทำงานอยู่ ไม่ได้แฮงก์ */
+  var slowHint = setTimeout(function () {
+    btn.textContent = (PENDING_IMAGE ? 'กำลังอัปโหลดรูป' : 'กำลังบันทึก') + '… เซิร์ฟเวอร์ตอบช้ากว่าปกติ โปรดรอ';
+  }, 15000);
+
   (existing ? API.updateMenuItem(payload) : API.addMenuItem(payload))
     .then(function (res) {
       if (!res || !res.success) {
@@ -808,10 +1122,12 @@ $('menu-form').addEventListener('submit', function (e) {
       }
       closeModal('menu-modal');
       toast((existing ? 'แก้ไขเมนู "' : 'เพิ่มเมนู "') + name + '" เรียบร้อยแล้ว');
-      loadMenu();
+      if (res.item) applyMenuItem(res.item);
+      else loadMenu();
     })
     .catch(onError)
     .finally(function () {
+      clearTimeout(slowHint);
       btn.disabled = false;
       btn.textContent = 'บันทึกเมนู';
     });
@@ -819,12 +1135,15 @@ $('menu-form').addEventListener('submit', function (e) {
 
 function toggleActive(item) {
   if (!HAS_BACKEND) { toast('ยังไม่ได้เชื่อมต่อเซิร์ฟเวอร์', 'err'); return; }
+  /* ไม่ส่ง stock มาด้วย เพราะแค่กดเปิด/ปิดขาย ไม่ได้ตั้งใจแก้ตัวเลขสต๊อก — ถ้าส่งค่าที่แคชไว้ตอนโหลด
+     อาจไปเขียนทับสต๊อกจริงที่ถูกหักไปแล้วจากการขายหลังจากนั้น (ดู updateMenuItem ฝั่ง Code.gs) */
   API.updateMenuItem({
     id: item.id,
     name: item.name,
     category: item.category,
     price: item.price,
     active: !item.active,
+    promo: item.promo,
     driveId: item.driveId
   })
     .then(function (res) {
@@ -833,7 +1152,8 @@ function toggleActive(item) {
         return;
       }
       toast((item.active ? 'ปิดขาย "' : 'เปิดขาย "') + item.name + '" แล้ว');
-      loadMenu();
+      if (res.item) applyMenuItem(res.item);
+      else loadMenu();
     })
     .catch(onError);
 }
@@ -872,12 +1192,15 @@ $('delete-confirm-btn').addEventListener('click', function () {
     });
 });
 
-/* เมนูที่หายไปจากเซิร์ฟเวอร์ต้องออกจากบิลที่ยังไม่ได้ชำระด้วย
-   ไม่งั้นจะกดชำระเงินด้วยเมนูที่ถูกลบไปแล้ว */
+/* เมนูที่หายไปจากเซิร์ฟเวอร์ต้องออกจากบิลที่ยังไม่ได้ชำระด้วย ไม่งั้นจะกดชำระเงินด้วยเมนูที่ถูกลบไปแล้ว
+   บรรทัดโปรโมชันก็เช็กด้วยว่าของที่เลือกไว้ในชุดยังอยู่ครบ ไม่งั้นจะขายชุดที่มีของไม่ครบ 3 ชิ้นจริงไปโดยไม่รู้ตัว */
 function dropMissingFromCart() {
   var before = CART.length;
   CART = CART.filter(function (c) {
-    return MENU.some(function (m) { return String(m.id) === String(c.id); });
+    if (c.promo && c.picks) {
+      return c.picks.every(function (p) { return MENU.some(function (m) { return String(m.id) === String(p.id); }); });
+    }
+    return c.promo || MENU.some(function (m) { return String(m.id) === String(c.id); });
   });
   if (CART.length !== before) renderBill();
 }

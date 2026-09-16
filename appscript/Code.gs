@@ -1,8 +1,8 @@
 // เอามาจาก URL: https://docs.google.com/spreadsheets/d/<ตรงนี้คือ ID>/edit
-const SPREADSHEET_ID = '';
+const SPREADSHEET_ID = '1A1ICU3qc6RNmhSeyhw1FcDnE_fwAZfyxKoHnhHGTEfA';
 
 // เอามาจาก URL: https://drive.google.com/drive/folders/<ตรงนี้คือ ID>
-const IMAGE_FOLDER_ID = '';
+const IMAGE_FOLDER_ID = '1nu2b0TAViaqJnk0UtATuzjiqNxmW1GzC';
 
 const SHEET_MENU = 'Menu';
 const SHEET_ORDERS = 'Orders';
@@ -14,14 +14,20 @@ function initAllsheet() {
   let menuSheet = ss.getSheetByName(SHEET_MENU);
   if (!menuSheet) {
     menuSheet = ss.insertSheet(SHEET_MENU);
-    // เพิ่มคอลัมน์ DriveId
-    menuSheet.appendRow(['ID', 'หมวดหมู่', 'ชื่อเมนู', 'ราคา', 'เปิดขาย', 'DriveId']);
+    // เพิ่มคอลัมน์ DriveId, โปรโมชัน 3 ชิ้น 100 และสต๊อก
+    menuSheet.appendRow(['ID', 'หมวดหมู่', 'ชื่อเมนู', 'ราคา', 'เปิดขาย', 'DriveId', 'โปรโมชัน 3 ชิ้น 100', 'สต๊อก']);
     menuSheet.setFrozenRows(1);
   } else {
-    // กรณีมีชีตเดิม ตรวจสอบว่ามีหัวคอลัมน์ DriveId หรือยัง
+    // กรณีมีชีตเดิม ตรวจสอบว่ามีหัวคอลัมน์ DriveId / โปรโมชัน / สต๊อก หรือยัง
     const headers = menuSheet.getRange(1, 1, 1, menuSheet.getLastColumn()).getValues()[0];
     if (headers.length < 6) {
       menuSheet.getRange(1, 6).setValue('DriveId');
+    }
+    if (headers.length < 7) {
+      menuSheet.getRange(1, 7).setValue('โปรโมชัน 3 ชิ้น 100');
+    }
+    if (headers.length < 8) {
+      menuSheet.getRange(1, 8).setValue('สต๊อก');
     }
   }
 
@@ -138,6 +144,42 @@ function checkConfig() {
   return report;
 }
 
+/* รันฟังก์ชันนี้ในตัวแก้ไข Apps Script แล้วดูที่บันทึกการดำเนินการ (Ctrl+Enter หรือ View > Logs)
+   ใช้เช็คตอนที่กดบันทึกเมนูจากหน้าเว็บแล้ว "สต๊อก" หรือ "โปรโมชัน" ไม่ขึ้นในชีตจริง
+   ถ้าเลขคอลัมน์ของ โปรโมชัน/สต๊อก ที่รายงานออกมาไม่ใช่ 7/8 ให้รัน initAllsheet() ก่อน
+   ถ้าหัวคอลัมน์ถูกต้องแต่ยังไม่บันทึก แปลว่าโค้ดที่รันอยู่จริงใน Apps Script Editor (ที่ผูกกับ URL /exec)
+   เป็นคนละเวอร์ชันกับไฟล์นี้ — ต้องคัดลอกไฟล์นี้ไปวางทับใน Editor แล้ว Deploy > Manage deployments
+   > แก้ deployment เดิม > เลือก Version: New version ใหม่อีกครั้ง (แค่กด Save ในตัวแก้ไขไม่พอ
+   เพราะ URL /exec จะยังชี้ไปที่เวอร์ชันเก่าที่ deploy ไว้ก่อนหน้าจนกว่าจะ deploy เวอร์ชันใหม่) */
+function checkMenuSheet() {
+  const sheet = getSS().getSheetByName(SHEET_MENU);
+  if (!sheet) return 'ไม่พบชีต ' + SHEET_MENU + ' — รัน initAllsheet() ก่อน';
+
+  const lines = [];
+  const lastCol = sheet.getLastColumn();
+  const lastRow = sheet.getLastRow();
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+
+  lines.push('จำนวนคอลัมน์ที่มีหัวตาราง: ' + lastCol);
+  headers.forEach((h, i) => lines.push('  คอลัมน์ ' + (i + 1) + ': "' + h + '"'));
+
+  const promoCol = headers.indexOf('โปรโมชัน 3 ชิ้น 100') + 1;
+  const stockCol = headers.indexOf('สต๊อก') + 1;
+  lines.push('คอลัมน์ "โปรโมชัน 3 ชิ้น 100" อยู่ที่: ' + (promoCol || 'ไม่พบ (ควรเป็น 7)'));
+  lines.push('คอลัมน์ "สต๊อก" อยู่ที่: ' + (stockCol || 'ไม่พบ (ควรเป็น 8)'));
+
+  if (lastRow > 1) {
+    const lastRowData = sheet.getRange(lastRow, 1, 1, lastCol).getValues()[0];
+    lines.push('แถวข้อมูลล่าสุด (แถวที่ ' + lastRow + '): ' + JSON.stringify(lastRowData));
+  } else {
+    lines.push('ยังไม่มีแถวข้อมูลเมนูเลย');
+  }
+
+  const report = lines.join('\n');
+  Logger.log(report);
+  return report;
+}
+
 function checkLogin(username, password) {
   const sheet = getSS().getSheetByName(SHEET_USERS);
   if (!sheet) return { success: false, message: 'ไม่พบชีต Users กรุณารัน initAllsheet' };
@@ -200,7 +242,35 @@ function isMenuRow(r) {
   return String(r[0] || '').trim() !== '' || String(r[2] || '').trim() !== '';
 }
 
+// ช่องสต๊อกว่าง = ไม่ได้ติดตามสต๊อก (ขายได้ไม่จำกัด) ต้องแยกจาก 0 = ของหมด
+function toStockOrNull(v) {
+  if (v === '' || v === null || v === undefined) return null;
+  return toNumber(v);
+}
+
+// ค่าที่จะเขียนกลับลงชีต: ไม่ได้ติดตามสต๊อกให้เก็บเป็นค่าว่าง ไม่ใช่ 0
+function stockCell(v) {
+  return (v === null || v === undefined || v === '') ? '' : toNumber(v);
+}
+
 // ---------- เมนู ----------
+
+// ใช้ร่วมกันทั้งตอนอ่านทั้งชีต (getAllMenuForAdmin) และตอนคืนค่าแถวเดียวหลังเพิ่ม/แก้ไข
+// (addMenuItem/updateMenuItem) เพื่อให้ฝั่งเว็บอัปเดตแถวนั้นในแคชได้เลยโดยไม่ต้องขอทั้งชีตซ้ำ
+function buildAdminItem(id, category, name, price, active, driveId, promo, stock) {
+  return {
+    id: id,
+    category: category,
+    name: name,
+    price: price,
+    active: active,
+    promo: promo,
+    stock: toStockOrNull(stock),
+    driveId: driveId || '',
+    fileId: extractDriveId(driveId),
+    imageUrl: getImageUrl(driveId)
+  };
+}
 
 function getMenu() {
   const sheet = getSS().getSheetByName(SHEET_MENU);
@@ -214,6 +284,8 @@ function getMenu() {
       category: r[1],
       name: r[2],
       price: toNumber(r[3]),
+      promo: toBool(r[6]),
+      stock: toStockOrNull(r[7]),
       driveId: r[5] || '',
       fileId: extractDriveId(r[5]),
       imageUrl: getImageUrl(r[5])
@@ -227,16 +299,7 @@ function getAllMenuForAdmin() {
   data.shift();
   return data
     .filter(isMenuRow)
-    .map(r => ({
-      id: r[0],
-      category: r[1],
-      name: r[2],
-      price: toNumber(r[3]),
-      active: toBool(r[4]),
-      driveId: r[5] || '',
-      fileId: extractDriveId(r[5]),
-      imageUrl: getImageUrl(r[5])
-    }));
+    .map(r => buildAdminItem(r[0], r[1], r[2], toNumber(r[3]), toBool(r[4]), r[5], toBool(r[6]), r[7]));
 }
 
 /**
@@ -292,8 +355,13 @@ function addMenuItem(item) {
       if (n > maxId) maxId = n;
     }
     const newId = maxId + 1;
-    sheet.appendRow([newId, item.category, item.name, toNumber(item.price), true, driveLink]);
-    return { success: true, id: newId };
+    const priceVal = toNumber(item.price);
+    const promoVal = !!item.promo;
+    const stockVal = stockCell(item.stock);
+    sheet.appendRow([newId, item.category, item.name, priceVal, true, driveLink, promoVal, stockVal]);
+    // ส่งแถวที่เพิ่งบันทึกกลับไปเลย ฝั่งเว็บจะได้อัปเดตแคชในตัวได้ทันที
+    // ไม่ต้องขอ getAllMenuForAdmin() ทั้งชีตซ้ำอีกรอบ (ลดเวลารอบันทึกเมนูลงครึ่งหนึ่ง)
+    return { success: true, id: newId, item: buildAdminItem(newId, item.category, item.name, priceVal, true, driveLink, promoVal, stockVal) };
   } finally {
     lock.releaseLock();
   }
@@ -311,8 +379,15 @@ function updateMenuItem(item) {
   const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]) === String(item.id)) {
-      sheet.getRange(i + 1, 2, 1, 5).setValues([[item.category, item.name, toNumber(item.price), toBool(item.active), driveLink]]);
-      return { success: true };
+      // สต๊อกอาจถูกหักไปแล้วจากการขายหลังจากเบราว์เซอร์โหลดเมนูมาแคชไว้ ถ้าคำขอนี้ไม่ได้ตั้งใจแก้ไข
+      // ค่าสต๊อกจริง ๆ (เช่น กดแค่เปิด/ปิดขาย ไม่ได้ส่ง stock มา) ต้องไม่เขียนทับด้วยค่าเก่าที่ค้างอยู่ในแคช
+      const stockVal = item.stock === undefined ? data[i][7] : stockCell(item.stock);
+      const priceVal = toNumber(item.price);
+      const activeVal = toBool(item.active);
+      const promoVal = !!item.promo;
+      sheet.getRange(i + 1, 2, 1, 7).setValues([[item.category, item.name, priceVal, activeVal, driveLink, promoVal, stockVal]]);
+      // ส่งแถวที่เพิ่งบันทึกกลับไปเลย ฝั่งเว็บจะได้อัปเดตแคชในตัวได้ทันที ไม่ต้องขอทั้งชีตซ้ำ
+      return { success: true, item: buildAdminItem(item.id, item.category, item.name, priceVal, activeVal, driveLink, promoVal, stockVal) };
     }
   }
   return { success: false, message: 'ไม่พบเมนูนี้' };
@@ -332,6 +407,61 @@ function deleteMenuItem(id) {
 
 // ---------- ออเดอร์ ----------
 
+// รวมจำนวนที่ต้องการหักต่อ id เมนู — เมนูปกติหักด้วย id ตรง ๆ ส่วนโปรโมชัน 3 ชิ้น 100
+// ที่มัดรวมเป็นบรรทัดเดียวจะแนบ picks (id + จำนวนต่อชุด) มาให้ทีละตัว คูณด้วยจำนวนชุดที่ซื้อ
+function neededStockById(items) {
+  const need = {};
+  (items || []).forEach(it => {
+    if (it.picks && it.picks.length) {
+      it.picks.forEach(p => {
+        const id = String(p.id);
+        need[id] = (need[id] || 0) + toNumber(p.qty) * toNumber(it.qty || 1);
+      });
+    } else if (it.id !== undefined && it.id !== null && it.id !== '') {
+      const id = String(it.id);
+      need[id] = (need[id] || 0) + toNumber(it.qty);
+    }
+  });
+  return need;
+}
+
+// เช็คว่าสต๊อกพอก่อนบันทึกบิลจริง — คืนชื่อ+จำนวนของรายการแรกที่ไม่พอ หรือ null ถ้าพอทุกอย่าง
+// ช่องสต๊อกว่าง (ไม่ได้ติดตาม) ถือว่าขายได้ไม่จำกัด ข้ามการเช็ค
+function findStockShortage(items, data) {
+  const need = neededStockById(items);
+  for (let i = 1; i < data.length; i++) {
+    const id = String(data[i][0]);
+    if (!(id in need)) continue;
+    const cur = data[i][7];
+    if (cur === '' || cur === null || cur === undefined) continue;
+    if (toNumber(cur) < need[id]) {
+      return { name: data[i][2], have: toNumber(cur), need: need[id] };
+    }
+  }
+  return null;
+}
+
+// หักสต๊อกจริงตามที่เช็คผ่านแล้ว — เรียกหลัง findStockShortage คืน null เท่านั้น
+// คืนค่าสต๊อกใหม่ของแต่ละ id ที่ถูกหัก ให้ฝั่งเว็บเอาไปอัปเดตตัวเลข "เหลือ" บนการ์ดได้ทันที
+// โดยไม่ต้องขอเมนูทั้งชีตใหม่ทั้งหมดหลังชำระเงินทุกครั้ง
+function deductStock(items, sheet, data) {
+  const rowById = {};
+  for (let i = 1; i < data.length; i++) rowById[String(data[i][0])] = i;
+
+  const need = neededStockById(items);
+  const updates = {};
+  Object.keys(need).forEach(id => {
+    const i = rowById[id];
+    if (i == null) return;
+    const cur = data[i][7];
+    if (cur === '' || cur === null || cur === undefined) return;
+    const newVal = toNumber(cur) - need[id];
+    sheet.getRange(i + 1, 8).setValue(newVal);
+    updates[id] = newVal;
+  });
+  return updates;
+}
+
 function submitOrder(order) {
   if (!order || !order.items || order.items.length === 0) {
     return { success: false, message: 'ไม่มีรายการอาหารในออเดอร์' };
@@ -347,23 +477,37 @@ function submitOrder(order) {
   const orderId = 'OD' + Utilities.formatDate(now, tz, 'yyMMdd-HHmmss')
     + '-' + ('00' + (now.getTime() % 1000)).slice(-3);
 
+  let stockUpdates = {};
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
+    const menuSheet = getSS().getSheetByName(SHEET_MENU);
+    const menuData = menuSheet ? menuSheet.getDataRange().getValues() : [];
+
+    // เช็คสต๊อกในล็อกเดียวกับการบันทึกบิล กันสองบิลพร้อมกันอ่านสต๊อกเดิมซ้ำแล้วขายเกินของจริง
+    const shortage = menuSheet ? findStockShortage(order.items, menuData) : null;
+    if (shortage) {
+      return {
+        success: false,
+        message: '"' + shortage.name + '" เหลือไม่พอ (เหลือ ' + shortage.have + ', ต้องการ ' + shortage.need + ')'
+      };
+    }
+
     getSS().getSheetByName(SHEET_ORDERS).appendRow([
       orderId,
       timeStr,
       order.tableName || '-',
       JSON.stringify(order.items),
       total,
-      order.payment || 'เงินสด',
+      order.payment || 'โอนเงิน',
       'สำเร็จ'
     ]);
+    if (menuSheet) stockUpdates = deductStock(order.items, menuSheet, menuData);
   } finally {
     lock.releaseLock();
   }
 
-  return { success: true, orderId: orderId, time: timeStr, total: total };
+  return { success: true, orderId: orderId, time: timeStr, total: total, stockUpdates: stockUpdates };
 }
 
 // date เป็น 'yyyy-MM-dd' ตามที่ <input type="date"> ส่งมา ถ้าไม่ส่งมาจะถือว่าเป็นวันนี้

@@ -1,7 +1,7 @@
 // api.js — ชั้นเชื่อมต่อ backend (Google Apps Script Web App)
 // เอา URL มาจาก Apps Script > Deploy > New deployment > Web app
 // ตั้งค่า Execute as: Me, Who has access: Anyone
-const API_URL = 'https://script.google.com/macros/s/AKfycbw3AHhwIJckQ2J7h4mIXWR9ksOmxus8ic_75Xeq5c4QzraW1joLujj6AAcbQqRSODPzaA/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbxa5LFWFZPup3YjmmeXqouTAid81xsrBWN47IsrO6_olxMtvF0hsbpfY6pAyo64G1jW/exec';
 
 const API = (() => {
     const useGas = typeof google !== 'undefined' && google.script && google.script.run;
@@ -53,9 +53,11 @@ const API = (() => {
     // แต่เฉพาะคำสั่งอ่านเท่านั้น คำสั่งเขียนถ้าลองซ้ำอาจได้บิลหรือเมนูซ้ำ
     const RETRYABLE = { getMenu: 1, getAllMenuForAdmin: 1, getOrdersByDate: 1 };
 
-    // เฉพาะคำสั่งที่อาจแนบรูปมาด้วยเท่านั้นที่ต้องรอนาน คำสั่งเขียนอื่นจบในไม่กี่วินาที
+    // เฉพาะคำสั่งเขียนที่อาจใช้เวลานานเท่านั้นที่ต้องรอนาน คำสั่งเขียนอื่นจบในไม่กี่วินาที
     // ถ้าให้รอ 60 วิเท่ากันหมด ปุ่มจะค้างอยู่นานเกินไปเวลาการตอบกลับหลุด
-    const SLOW_WRITE = { addMenuItem: 1, updateMenuItem: 1 };
+    // submitOrder ต้องหักสต๊อกในล็อกเดียวกันด้วย จึงช้ากว่าคำสั่งเขียนทั่วไป — 25 วิเดิมทำให้ลูกค้าเจอ
+    // "บันทึกไม่สำเร็จ" ทั้งที่บิลถูกบันทึกจริงแล้ว (Apps Script รันงานต่อแม้ฝั่งเบราว์เซอร์เลิกรอ)
+    const SLOW_WRITE = { addMenuItem: 1, updateMenuItem: 1, submitOrder: 1 };
 
     const TIMEOUT_READ = 20000;
     const TIMEOUT_WRITE = 25000;
